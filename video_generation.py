@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -118,7 +118,10 @@ class VideoGenerator:
 
     def _generate_video_from_images(self, inp: str, out: str):
         img_array = []
-        attention_images_list = sorted(glob.glob(os.path.join(inp, "attn-*.jpg")))
+        attention_images_list = []
+        for ext in ["jpg", "png"]:
+            attention_images_list.extend(glob.glob(os.path.join(inp, f"attn-*.{ext}")))
+        attention_images_list = sorted(attention_images_list)
 
         # Get size of the first image
         with open(attention_images_list[0], "rb") as f:
@@ -150,7 +153,11 @@ class VideoGenerator:
     def _inference(self, inp: str, out: str):
         print(f"Generating attention images to {out}")
 
-        for img_path in tqdm(sorted(glob.glob(os.path.join(inp, "*.jpg")))):
+        images_list = []
+        for ext in ["jpg", "png"]:
+            images_list.extend(glob.glob(os.path.join(inp, f"attn-*.{ext}")))
+        images_list = sorted(images_list)
+        for img_path in tqdm(images_list):
             with open(img_path, "rb") as f:
                 img = Image.open(f)
                 img = img.convert("RGB")
