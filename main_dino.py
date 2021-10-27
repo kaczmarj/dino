@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,6 +29,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torchvision import models as torchvision_models
+import torchvision
 
 import utils
 import vision_transformer as vits
@@ -462,6 +463,39 @@ class DataAugmentationDINO(object):
         for _ in range(self.local_crops_number):
             crops.append(self.local_transfo(image))
         return crops
+
+
+from PIL import Image
+import pandas as pd
+from torch.utils.data import Dataset
+
+
+class ImageListDataSet(Dataset):
+    """Dataset that consume a CSV with two columns: image path and class name."""
+    def __init__(self, csv_path, transform):
+        self.csv_path = csv_path
+        self.transform = transform
+        print(f"Loading dataset from {self.csv_path}")
+        self.df = pd.read_csv(self.csv_path, header=None)
+        # Create class names. When tiling tcga with pyhist, the cancer type is -4.
+        self.df.loc[:, "class"] = self.df.iloc[:, 0].str.split("/").str[-4]
+        classes = sorted(self.df.iloc[:, 1].unique().tolist())
+        self.classes_to_idx = {cls_name: i for i, cls_name in enumerate(classes)}
+        print(f"Found {self.df.shape[0]} images.")
+        print(f"Classes to idx: {self.classes_to_idx}")
+
+    def __len__(self) -> int:
+        return self.df.shape[0]
+
+    def __getitem__(self, idx):
+        image_path, class_name = self.df.iloc[idx, :2]
+        class_idx = self.classes_to_idx[class_name]
+        with open(image_path, "rb") as f:
+            image = Image.open(f)
+            image = image.convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+        return image, class_idx
 
 
 if __name__ == '__main__':
