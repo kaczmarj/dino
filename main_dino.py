@@ -1,11 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 #     http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -416,10 +416,23 @@ class DINOLoss(nn.Module):
         self.center = self.center * self.center_momentum + batch_center * (1 - self.center_momentum)
 
 
+def _augment_stain(image):
+    from histomicstk.preprocessing.augmentation.color_augmentation import rgb_perturb_stain_concentration
+    from histomicstk.saliency.tissue_detection import get_tissue_mask
+
+    image = np.asarray(image)
+    mask, _ = get_tissue_mask(image, deconvolve_first=True,
+        n_thresholding_steps=1, sigma=5, min_size=30)
+    mask = mask == 0
+    return Image.fromarray(rgb_perturb_stain_concentration(image, mask_out=mask))
+
+
 class DataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number):
         flip_and_color_jitter = transforms.Compose([
+            transforms.RandomApply([_augment_stain], p=0.8),
             transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.5),
             transforms.RandomApply(
                 [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)],
                 p=0.8
