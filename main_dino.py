@@ -19,6 +19,8 @@ import time
 import math
 import json
 from pathlib import Path
+import gzip
+import pickle
 
 import numpy as np
 from PIL import Image
@@ -30,6 +32,7 @@ import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torchvision import models as torchvision_models
 
+from tardataset import TarDataset
 import utils
 import vision_transformer as vits
 from vision_transformer import DINOHead
@@ -117,12 +120,12 @@ def get_args_parser():
         Used for small local view cropping of multi-crop.""")
 
     # Misc
-    parser.add_argument('--data_path', default='/path/to/imagenet/train/', type=str,
-        help='Please specify path to the ImageNet training data.')
+    parser.add_argument('--data_path', required=True, type=str,
+        help='Please specify path to the training data.')
     parser.add_argument('--output_dir', default=".", type=str, help='Path to save logs and checkpoints.')
     parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
     parser.add_argument('--seed', default=0, type=int, help='Random seed.')
-    parser.add_argument('--num_workers', default=10, type=int, help='Number of data loading workers per GPU.')
+    parser.add_argument('--num_workers', default=4, type=int, help='Number of data loading workers per GPU.')
     parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
         distributed training; see https://pytorch.org/docs/stable/distributed.html""")
     parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
@@ -142,7 +145,18 @@ def train_dino(args):
         args.local_crops_scale,
         args.local_crops_number,
     )
-    dataset = datasets.ImageFolder(args.data_path, transform=transform)
+
+    print(f"Loading data: {args.data_path}")
+    with gzip.open(args.data_path[:-4] + "-members.pkl.gz", "rb") as f:
+        tar_infos = pickle.load(f)
+
+    dataset = TarDataset(
+        archive=args.data_path,
+        transform=transform,
+        members_by_name=tar_infos["members_by_name"],
+        samples=tar_infos["samples-train"],
+    )
+
     sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = torch.utils.data.DataLoader(
         dataset,
@@ -303,7 +317,7 @@ def train_one_epoch(student, teacher, teacher_without_ddp, dino_loss, data_loade
                     fp16_scaler, args):
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
-    for it, (images, _) in enumerate(metric_logger.log_every(data_loader, 10, header)):
+    for it, images in enumerate(metric_logger.log_every(data_loader, 10, header)):
         # update weight decay and learning rate according to their schedule
         it = len(data_loader) * epoch + it  # global training iteration
         for i, param_group in enumerate(optimizer.param_groups):
@@ -420,11 +434,17 @@ def _augment_stain(image):
     from histomicstk.preprocessing.augmentation.color_augmentation import rgb_perturb_stain_concentration
     from histomicstk.saliency.tissue_detection import get_tissue_mask
 
-    image = np.asarray(image)
-    mask, _ = get_tissue_mask(image, deconvolve_first=True,
-        n_thresholding_steps=1, sigma=5, min_size=30)
-    mask = mask == 0
-    return Image.fromarray(rgb_perturb_stain_concentration(image, mask_out=mask))
+    try:
+        img_orig = image
+        image = np.asarray(image)
+        mask, _ = get_tissue_mask(image, deconvolve_first=True,
+            n_thresholding_steps=1, sigma=5, min_size=30)
+        mask = mask == 0
+        return Image.fromarray(rgb_perturb_stain_concentration(image, mask_out=mask))
+    except Exception:
+        # exceptions can be raised if the patch is mostly white. but we want to include
+        # these in our training set because we will encounter white patches in the wild.
+        return img_orig
 
 
 class DataAugmentationDINO(object):
@@ -446,15 +466,15 @@ class DataAugmentationDINO(object):
 
         # first global crop
         self.global_transfo1 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
+            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             utils.GaussianBlur(1.0),
             normalize,
         ])
         # second global crop
         self.global_transfo2 = transforms.Compose([
-            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
+            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
             utils.GaussianBlur(0.1),
             utils.Solarization(0.2),
             normalize,
@@ -462,8 +482,8 @@ class DataAugmentationDINO(object):
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.local_transfo = transforms.Compose([
-            transforms.RandomResizedCrop(96, scale=local_crops_scale, interpolation=Image.BICUBIC),
             flip_and_color_jitter,
+            transforms.RandomResizedCrop(96, scale=local_crops_scale, interpolation=Image.BICUBIC),
             utils.GaussianBlur(p=0.5),
             normalize,
         ])
